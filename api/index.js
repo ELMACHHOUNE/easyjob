@@ -16,98 +16,150 @@ var __export = (target, all) => {
 // backend/utils/sendEmail.js
 var sendEmail_exports = {};
 __export(sendEmail_exports, {
+  brandButton: () => brandButton,
+  brandLayout: () => brandLayout,
+  escapeHtml: () => escapeHtml,
   sendEmail: () => sendEmail,
   sendPasswordResetEmail: () => sendPasswordResetEmail,
   sendVerificationEmail: () => sendVerificationEmail
 });
 import nodemailer from "nodemailer";
-async function getTransporter() {
-  if (transporterPromise) return transporterPromise;
-  const hasRealCreds = process.env.EMAIL_USER && process.env.EMAIL_PASS && process.env.EMAIL_USER !== "your_email@gmail.com" && process.env.EMAIL_PASS !== "your_app_password";
-  if (hasRealCreds) {
-    transporterPromise = Promise.resolve(nodemailer.createTransport({
-      host: process.env.EMAIL_HOST || "smtp.gmail.com",
-      port: parseInt(process.env.EMAIL_PORT || "587"),
-      secure: false,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-      }
-    }));
-  } else {
-    const testAccount = await nodemailer.createTestAccount();
-    console.log("\u{1F4E7} Ethereal test account:", testAccount.user);
-    transporterPromise = Promise.resolve(nodemailer.createTransport({
-      host: "smtp.ethereal.email",
-      port: 587,
-      secure: false,
-      auth: {
-        user: testAccount.user,
-        pass: testAccount.pass
-      }
-    }));
-  }
-  return transporterPromise;
+function escapeHtml(value = "") {
+  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
-var transporterPromise, sendEmail, sendVerificationEmail, sendPasswordResetEmail;
+function brandButton({ href, label, bg = "#2563eb" }) {
+  return `
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0;">
+      <tr>
+        <td style="border-radius:12px; background-color:${bg};">
+          <a href="${escapeHtml(href)}" style="display:inline-block; padding:13px 28px; font-family:Inter, Arial, sans-serif; font-size:14px; font-weight:700; color:#ffffff; text-decoration:none;">${escapeHtml(label)}</a>
+        </td>
+      </tr>
+    </table>
+  `;
+}
+function brandLayout({ accent = "#2563eb", title, content, footerText }) {
+  return `
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f1f5f9;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;">
+            <tr>
+              <td style="padding-bottom:20px;">
+                <div style="font-family:Inter, Arial, sans-serif; font-size:20px; font-weight:800; color:#0f172a; letter-spacing:-0.5px; line-height:1;">
+                  <span style="display:inline-block; background-color:${accent}; color:#ffffff; font-size:14px; font-weight:800; border-radius:8px; padding:6px 10px; margin-right:8px; vertical-align:middle;">E</span>
+                  Easy<span style="color:${accent};">Job</span>
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <div style="background-color:#ffffff; border:1px solid #e2e8f0; border-radius:16px; padding:32px; box-shadow:0 6px 24px rgba(2,6,23,0.06); font-family:Inter, Arial, sans-serif;">
+                  <h1 style="margin:0 0 10px 0; font-size:20px; font-weight:700; color:#0f172a; line-height:1.3;">${escapeHtml(title)}</h1>
+                  <div style="width:48px; height:4px; border-radius:2px; background-color:${accent}; margin-bottom:22px;"></div>
+                  ${content}
+                </div>
+                <div style="padding:24px 8px 8px 8px; text-align:center; font-family:Inter, Arial, sans-serif; font-size:12px; color:#94a3b8; line-height:1.7;">
+                  ${footerText || "EasyJob \u2014 Votre carri\xE8re au Maroc"}<br />
+                  \xA9 ${(/* @__PURE__ */ new Date()).getFullYear()} EasyJob. Tous droits r\xE9serv\xE9s.
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  `;
+}
+function isEmailConfigured() {
+  return !!(process.env.EMAIL_USER && process.env.EMAIL_PASS && !process.env.EMAIL_USER.startsWith("your_") && !process.env.EMAIL_PASS.startsWith("your_"));
+}
+function getFromAddress() {
+  const envFrom = process.env.EMAIL_FROM;
+  if (envFrom && !envFrom.includes("your_email@gmail.com")) {
+    return envFrom;
+  }
+  return `EasyJob <${process.env.EMAIL_USER}>`;
+}
+function getTransporter() {
+  if (transporter) return transporter;
+  const port = parseInt(process.env.EMAIL_PORT || "587", 10);
+  transporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST || "smtp.gmail.com",
+    port,
+    secure: port === 465,
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS
+    },
+    pool: true,
+    maxConnections: 5,
+    maxMessages: 100,
+    connectionTimeout: 1e4,
+    greetingTimeout: 1e4,
+    socketTimeout: 3e4
+  });
+  transporter.verify().then((ok) => {
+    if (ok) console.log("\u2705 SMTP connect\xE9 et authentifi\xE9");
+  }).catch((err) => {
+    console.error("\u274C \xC9chec de la connexion SMTP:", err.message);
+  });
+  return transporter;
+}
+var transporter, sendEmail, sendVerificationEmail, sendPasswordResetEmail;
 var init_sendEmail = __esm({
   "backend/utils/sendEmail.js"() {
-    transporterPromise = null;
-    sendEmail = async ({ to, subject, html }) => {
+    transporter = null;
+    sendEmail = async ({ to, subject, html, attachments }) => {
       try {
-        const transporter = await getTransporter();
-        const info = await transporter.sendMail({
-          from: process.env.EMAIL_FROM || "EasyJob <noreply@easyjob.ma>",
+        if (!isEmailConfigured()) {
+          console.warn(`\u26A0\uFE0F Email non envoy\xE9 \xE0 ${to} (sujet: "${subject}") \u2014 SMTP non configur\xE9. D\xE9finissez EMAIL_USER/EMAIL_PASS dans le fichier .env`);
+          return { success: false, emailSent: false, error: "SMTP non configur\xE9" };
+        }
+        const info = await getTransporter().sendMail({
+          from: getFromAddress(),
           to,
           subject,
-          html
+          html,
+          ...attachments && attachments.length ? { attachments } : {}
         });
-        const previewUrl = nodemailer.getTestMessageUrl(info);
         console.log("\u{1F4E7} Email envoy\xE9:", info.messageId);
-        if (previewUrl) {
-          console.log("\u{1F517} Voir l'email:", previewUrl);
-        }
-        return { success: true, messageId: info.messageId, previewUrl: previewUrl || null };
+        return { success: true, emailSent: true, messageId: info.messageId };
       } catch (error) {
         console.error("\u274C Erreur envoi email:", error.message);
-        return { success: false, error: error.message };
+        return { success: false, emailSent: false, error: error.message };
       }
     };
     sendVerificationEmail = async (email, firstName, code) => {
-      const html = `
-    <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px;">
-      <div style="text-align: center; margin-bottom: 30px;">
-        <h1 style="color: #2563EB; font-size: 28px;">EasyJob</h1>
-      </div>
-      <div style="background: #f8fafc; border-radius: 12px; padding: 30px; text-align: center;">
-        <h2 style="color: #1e293b; margin-bottom: 10px;">Bienvenue ${firstName} !</h2>
-        <p style="color: #64748b; margin-bottom: 25px;">Voici votre code de v\xE9rification :</p>
-        <div style="background: white; border: 2px dashed #2563EB; border-radius: 12px; padding: 20px; margin-bottom: 25px;">
-          <span style="font-size: 32px; font-weight: bold; color: #2563EB; letter-spacing: 8px;">${code}</span>
-        </div>
-        <p style="color: #94a3b8; font-size: 13px;">Ce code expire dans 10 minutes.</p>
-        <p style="color: #94a3b8; font-size: 13px;">Si vous n'avez pas cr\xE9\xE9 de compte, ignorez cet email.</p>
-      </div>
+      const content = `
+    <p style="margin:0 0 8px 0; font-size:14px; color:#334155; line-height:1.6;">Bonjour <strong>${escapeHtml(firstName)}</strong>,</p>
+    <p style="margin:0 0 22px 0; font-size:14px; color:#334155; line-height:1.6;">Merci de vous \xEAtre inscrit sur EasyJob. Pour activer votre compte, saisissez le code de v\xE9rification suivant :</p>
+    <div style="background:#eff6ff; border:2px dashed #2563eb; border-radius:12px; padding:18px; text-align:center; margin:0 0 22px 0;">
+      <div style="font-family:Inter, Arial, sans-serif; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:#64748b; margin-bottom:6px;">Code de v\xE9rification</div>
+      <span style="font-family:Inter, Arial, sans-serif; font-size:32px; font-weight:800; color:#2563eb; letter-spacing:8px;">${escapeHtml(code)}</span>
     </div>
+    <p style="margin:0; font-size:13px; color:#94a3b8; line-height:1.6;">Ce code expire dans 10 minutes. Si vous n'avez pas cr\xE9\xE9 de compte, ignorez cet email.</p>
   `;
-      return sendEmail({ to: email, subject: "EasyJob \u2014 V\xE9rification de votre email", html });
+      return sendEmail({
+        to: email,
+        subject: "EasyJob \u2014 V\xE9rification de votre email",
+        html: brandLayout({ title: "V\xE9rifiez votre adresse email", content })
+      });
     };
     sendPasswordResetEmail = async (email, firstName, resetUrl) => {
-      const html = `
-    <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px;">
-      <div style="text-align: center; margin-bottom: 30px;">
-        <h1 style="color: #2563EB; font-size: 28px;">EasyJob</h1>
-      </div>
-      <div style="background: #f8fafc; border-radius: 12px; padding: 30px;">
-        <h2 style="color: #1e293b;">R\xE9initialisation du mot de passe</h2>
-        <p style="color: #64748b; margin-bottom: 20px;">Bonjour ${firstName},</p>
-        <p style="color: #64748b; margin-bottom: 20px;">Cliquez sur le bouton ci-dessous pour r\xE9initialiser votre mot de passe :</p>
-        <a href="${resetUrl}" style="display: inline-block; background: #2563EB; color: white; padding: 12px 30px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-bottom: 20px;">R\xE9initialiser</a>
-        <p style="color: #94a3b8; font-size: 13px;">Ce lien expire dans 1 heure.</p>
-      </div>
-    </div>
+      const content = `
+    <p style="margin:0 0 8px 0; font-size:14px; color:#334155; line-height:1.6;">Bonjour <strong>${escapeHtml(firstName)}</strong>,</p>
+    <p style="margin:0 0 22px 0; font-size:14px; color:#334155; line-height:1.6;">Nous avons re\xE7u une demande de r\xE9initialisation de votre mot de passe. Cliquez sur le bouton ci-dessous pour en d\xE9finir un nouveau :</p>
+    ${brandButton({ href: resetUrl, label: "R\xE9initialiser mon mot de passe" })}
+    <p style="margin:0 0 6px 0; font-size:13px; color:#94a3b8; line-height:1.6;">Ce lien est valable pendant 1 heure.</p>
+    <p style="margin:0 0 16px 0; font-size:13px; color:#94a3b8; line-height:1.6;">Si vous n'\xEAtes pas \xE0 l'origine de cette demande, vous pouvez ignorer cet email. Votre mot de passe ne sera pas modifi\xE9.</p>
+    <p style="margin:16px 0 0 0; font-size:12px; color:#94a3b8; line-height:1.6; word-break:break-all;">Le bouton ne fonctionne pas ? Copiez ce lien : <a href="${escapeHtml(resetUrl)}" style="color:#2563eb;">${escapeHtml(resetUrl)}</a></p>
   `;
-      return sendEmail({ to: email, subject: "EasyJob \u2014 R\xE9initialisation du mot de passe", html });
+      return sendEmail({
+        to: email,
+        subject: "EasyJob \u2014 R\xE9initialisation de votre mot de passe",
+        html: brandLayout({ title: "R\xE9initialisation du mot de passe", content })
+      });
     };
   }
 });
@@ -117,10 +169,10 @@ var dbMigration_exports = {};
 __export(dbMigration_exports, {
   fixJobOfferIndexes: () => fixJobOfferIndexes
 });
-import mongoose17 from "mongoose";
+import mongoose18 from "mongoose";
 async function fixJobOfferIndexes() {
   try {
-    const db = mongoose17.connection.db;
+    const db = mongoose18.connection.db;
     if (!db) return;
     const collection = db.collection("joboffers");
     const indexes = await collection.indexes();
@@ -129,7 +181,7 @@ async function fixJobOfferIndexes() {
       await collection.dropIndex(OLD_JOB_INDEX);
       console.log("\u{1F9F9} Ancien index unique supprim\xE9 (userId_1_source_1_sourceId_1)");
     }
-    await mongoose17.model("JobOffer").createIndexes();
+    await mongoose18.model("JobOffer").createIndexes();
   } catch (err) {
     console.error("Migration index JobOffer \xE9chou\xE9e:", err.message);
   }
@@ -141,9 +193,12 @@ var init_dbMigration = __esm({
   }
 });
 
+// backend/handler.js
+import dotenv from "dotenv";
+
 // backend/server.js
 import express17 from "express";
-import mongoose18 from "mongoose";
+import mongoose19 from "mongoose";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
@@ -295,7 +350,7 @@ var generateRefreshToken = (userId) => {
   return jwt.sign({ id: userId }, process.env.JWT_REFRESH_SECRET, { expiresIn: "7d" });
 };
 var generateEmailVerificationCode = () => {
-  return Math.floor(1e5 + Math.random() * 9e5).toString();
+  return crypto.randomInt(1e5, 1e6).toString();
 };
 var generateResetPasswordToken = () => {
   return crypto.randomBytes(32).toString("hex");
@@ -391,8 +446,7 @@ router.post("/register", async (req, res) => {
       accessToken,
       refreshToken,
       user,
-      emailSent,
-      previewUrl: emailResult.previewUrl || null
+      emailSent
     });
   } catch (error) {
     console.error("Erreur register:", error);
@@ -431,7 +485,7 @@ router.post("/resend-verification", async (req, res) => {
     user.emailVerificationExpire = new Date(Date.now() + 10 * 60 * 1e3);
     await user.save();
     const emailResult = await sendVerificationEmail(user.email, user.firstName, verificationCode);
-    res.json({ message: "Code de v\xE9rification renvoy\xE9", previewUrl: emailResult.previewUrl || null });
+    res.json({ message: "Code de v\xE9rification renvoy\xE9", emailSent: emailResult.success });
   } catch (error) {
     res.status(500).json({ error: "Erreur lors de l'envoi" });
   }
@@ -599,9 +653,9 @@ router2.get("/", protect, async (req, res) => {
     }
     let hasCV = false;
     try {
-      const CV3 = mongoose4.models.CV;
-      if (CV3) {
-        const cv = await CV3.findOne({ userId: req.user._id, isActive: true });
+      const CV = mongoose4.models.CV;
+      if (CV) {
+        const cv = await CV.findOne({ userId: req.user._id, isActive: true });
         hasCV = !!cv;
       }
     } catch (_) {
@@ -770,6 +824,8 @@ var applicationSchema = new mongoose6.Schema({
     to: String,
     subject: String,
     body: String,
+    attachCv: { type: Boolean, default: false },
+    messageId: String,
     sentAt: Date,
     openedAt: Date
   },
@@ -853,35 +909,6 @@ var notificationSchema = new mongoose7.Schema({
 notificationSchema.index({ userId: 1, createdAt: -1 });
 notificationSchema.index({ userId: 1, isRead: 1 });
 var Notification_default = mongoose7.model("Notification", notificationSchema);
-
-// backend/models/CompanyEmail.js
-import mongoose8 from "mongoose";
-var companyEmailSchema = new mongoose8.Schema({
-  companyName: { type: String, required: true, trim: true },
-  email: { type: String, required: true, lowercase: true, trim: true },
-  website: { type: String, default: "" },
-  sector: { type: String, required: true },
-  domain: { type: String, required: true },
-  companyType: {
-    type: String,
-    enum: ["multinationale", "publique", "privee", "startup", "pme", "cabinet", "ong"],
-    default: "privee"
-  },
-  companySize: {
-    type: String,
-    enum: ["1-10", "11-50", "51-200", "201-500", "501-1000", "1000+"],
-    default: "51-200"
-  },
-  city: { type: String, default: "Casablanca" },
-  country: { type: String, default: "Maroc" },
-  phone: { type: String, default: "" },
-  description: { type: String, default: "" },
-  isActive: { type: Boolean, default: true }
-}, { timestamps: true });
-companyEmailSchema.index({ companyName: "text", email: "text", sector: "text", domain: "text" });
-companyEmailSchema.index({ sector: 1, domain: 1, companyType: 1, city: 1 });
-companyEmailSchema.index({ email: 1 }, { unique: true });
-var CompanyEmail_default = mongoose8.model("CompanyEmail", companyEmailSchema);
 
 // backend/services/NotificationService.js
 var io = null;
@@ -1858,14 +1885,14 @@ function calculateCandidateMatch(candidateProfile, jobOffer) {
 }
 
 // backend/services/candidateInfo.js
-import mongoose9 from "mongoose";
+import mongoose8 from "mongoose";
 async function buildCandidateInfo(userId, jobOffer) {
   const [user, profile] = await Promise.all([
     User_default.findById(userId),
     UserProfile_default.findOne({ userId })
   ]);
-  const CV3 = mongoose9.models.CV;
-  const cv = CV3 ? await CV3.findOne({ userId, isActive: true }) : null;
+  const CV = mongoose8.models.CV;
+  const cv = CV ? await CV.findOne({ userId, isActive: true }) : null;
   const cvSkills = cv?.parsedData?.skills || [];
   const profileSkills = profile?.skills || [];
   const allSkills = [.../* @__PURE__ */ new Set([...profileSkills, ...cvSkills])];
@@ -1931,9 +1958,9 @@ router3.get("/", protect, async (req, res) => {
     if (contractType) query.contractType = contractType;
     if (location) query.location = { $regex: location, $options: "i" };
     if (source) query.source = source;
-    let sortOption = { relevanceScore: -1 };
-    if (sort === "date") sortOption = { postedAt: -1 };
-    else if (sort === "salary") sortOption = { "salary.max": -1 };
+    let sortOption = { relevanceScore: -1, postedAt: -1, createdAt: -1 };
+    if (sort === "date") sortOption = { postedAt: -1, createdAt: -1 };
+    else if (sort === "salary") sortOption = { "salary.max": -1, postedAt: -1, createdAt: -1 };
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [jobs, total] = await Promise.all([
       JobOffer_default.find(query).sort(sortOption).skip(skip).limit(parseInt(limit)),
@@ -2093,6 +2120,41 @@ var jobs_default = router3;
 
 // backend/routes/applications.js
 import express4 from "express";
+
+// backend/models/CV.js
+import mongoose9 from "mongoose";
+var cvSchema = new mongoose9.Schema({
+  userId: { type: mongoose9.Schema.Types.ObjectId, ref: "User", required: true },
+  fileName: String,
+  originalName: String,
+  fileData: String,
+  fileSize: Number,
+  mimeType: String,
+  extractedText: { type: String, default: "" },
+  parsedData: {
+    skills: [String],
+    experience: [{ title: String, company: String, period: String, description: String }],
+    education: [{ degree: String, institution: String, year: String }],
+    languages: [String],
+    email: String,
+    phone: String,
+    location: String
+  },
+  analysis: {
+    score: { type: Number, default: 0 },
+    strengths: [String],
+    improvements: [String],
+    suggestions: [String]
+  },
+  candidateSummary: { type: String, default: "" },
+  keywords: [String],
+  isActive: { type: Boolean, default: true },
+  version: { type: Number, default: 1 }
+}, { timestamps: true });
+var CV_default = mongoose9.models.CV || mongoose9.model("CV", cvSchema);
+
+// backend/routes/applications.js
+init_sendEmail();
 var router4 = express4.Router();
 router4.get("/", protect, async (req, res) => {
   try {
@@ -2172,17 +2234,65 @@ router4.post("/:id/send", protect, async (req, res) => {
   try {
     const app2 = await Application_default.findOne({ _id: req.params.id, userId: req.user._id });
     if (!app2) return res.status(404).json({ error: "Candidature non trouv\xE9e" });
+    const emailData = req.body.email || {};
+    const { to, subject, body, attachCv } = emailData;
+    if (!to || !subject || !body) {
+      return res.status(400).json({ error: "Destinataire, objet et contenu de l'email requis" });
+    }
+    const [jobOffer, user] = await Promise.all([
+      JobOffer_default.findById(app2.jobOfferId),
+      User_default.findById(req.user._id)
+    ]);
+    const recipientName = jobOffer?.recruiterName || "Recruteur";
+    const company = jobOffer?.company || "";
+    const candidateName = `${user?.firstName || ""} ${user?.lastName || ""}`.trim();
+    const attachments = [];
+    if (attachCv) {
+      const cv = await CV_default.findOne({ userId: req.user._id, isActive: true });
+      if (cv && cv.fileData) {
+        const rawBase64 = cv.fileData.startsWith("data:") ? cv.fileData.split(",")[1] : cv.fileData;
+        attachments.push({
+          filename: cv.originalName || "CV.pdf",
+          content: Buffer.from(rawBase64, "base64"),
+          contentType: cv.mimeType || "application/pdf"
+        });
+      }
+    }
+    const safeRecipient = escapeHtml(recipientName) + (company ? ` (${escapeHtml(company)})` : "");
+    const content = `
+      <p style="margin:0 0 8px 0; font-size:14px; color:#334155; line-height:1.6;">Bonjour <strong>${safeRecipient}</strong>,</p>
+      <p style="margin:0 0 20px 0; font-size:14px; color:#334155; line-height:1.6;">Vous avez re\xE7u une nouvelle candidature via EasyJob :</p>
+      <div style="background:#eff6ff; border-left:4px solid #2563eb; border-radius:12px; padding:18px 20px; margin:0 0 6px 0; white-space:pre-wrap; color:#334155; font-size:14px; line-height:1.7;">${escapeHtml(body)}</div>
+      <p style="margin:14px 0 0 0; font-size:13px; color:#94a3b8; line-height:1.6;">Candidature envoy\xE9e par <strong>${escapeHtml(candidateName)}</strong></p>
+    `;
+    const html = brandLayout({
+      title: "Nouvelle candidature re\xE7ue",
+      content,
+      footerText: "Candidature envoy\xE9e via EasyJob \u2014 Votre carri\xE8re au Maroc"
+    });
+    const emailResult = await sendEmail({ to, subject, html, attachments });
+    if (!emailResult.success) {
+      return res.status(500).json({ error: "Erreur lors de l'envoi de l'email", details: emailResult.error });
+    }
     app2.status = "envoyee";
     app2.appliedAt = /* @__PURE__ */ new Date();
+    app2.email = {
+      to,
+      subject,
+      body,
+      attachCv: !!attachCv,
+      messageId: emailResult.messageId,
+      sentAt: /* @__PURE__ */ new Date()
+    };
     if (!app2.statusHistory) app2.statusHistory = [];
     app2.statusHistory.push({ status: "envoyee", changedAt: /* @__PURE__ */ new Date(), changedBy: "candidat", note: "Candidature envoy\xE9e" });
     await app2.save();
-    const jobOffer = await JobOffer_default.findById(app2.jobOfferId);
     if (jobOffer) {
       notifyNewApplicationToRecruiter(app2, jobOffer);
     }
-    res.json({ application: app2, message: "Candidature envoy\xE9e avec succ\xE8s !" });
+    res.json({ application: app2, message: "Candidature envoy\xE9e avec succ\xE8s !", messageId: emailResult.messageId });
   } catch (error) {
+    console.error("Erreur envoi candidature:", error);
     res.status(500).json({ error: "Erreur lors de l'envoi" });
   }
 });
@@ -2524,7 +2634,7 @@ var scrapingLogSchema = new mongoose11.Schema({
     offersFound: { type: Number, default: 0 },
     newOffers: { type: Number, default: 0 },
     duplicatesSkipped: { type: Number, default: 0 },
-    errors: [String],
+    errorMessages: [String],
     duration: Number
   }],
   totalOffersFound: { type: Number, default: 0 },
@@ -2595,7 +2705,7 @@ router8.post("/run", protect, async (req, res) => {
         newOffers,
         duplicatesSkipped: result.jobs.length - newOffers,
         duration: result.duration,
-        errors: result.error ? [result.error] : []
+        errorMessages: result.error ? [result.error] : []
       });
     }
     log.status = "success";
@@ -2650,15 +2760,55 @@ var emailTemplateSchema = new mongoose12.Schema({
   body: { type: String, required: true },
   variables: [String],
   isDefault: { type: Boolean, default: false },
-  category: { type: String, enum: ["candidature", "relance", "remerciement", "autre"], default: "candidature" },
+  category: { type: String, enum: ["Candidature", "Relance", "Remerciement", "Suivi", "Personnalis\xE9"], default: "Candidature" },
   usageCount: { type: Number, default: 0 }
 }, { timestamps: true });
 var EmailTemplate_default = mongoose12.model("EmailTemplate", emailTemplateSchema);
 
 // backend/routes/emailTemplates.js
 var router9 = express9.Router();
+var DEFAULT_TEMPLATES = [
+  {
+    name: "Candidature Standard",
+    subject: "Candidature au poste de {{jobTitle}} chez {{company}}",
+    body: "Madame, Monsieur,\n\nJe me permets de vous adresser ma candidature pour le poste de {{jobTitle}} au sein de {{company}}.\n\nTitulaire d'un parcours en {{studyField}} et fort de {{experienceYears}} ann\xE9es d'exp\xE9rience, je suis convaincu(e) de pouvoir contribuer activement aux objectifs de votre entreprise.\n\nJe reste \xE0 votre disposition pour un entretien \xE0 votre convenance.\n\nDans cette attente, je vous prie d'agr\xE9er, Madame, Monsieur, l'expression de mes salutations distingu\xE9es.\n\n{{userName}}\n{{applicationDate}}",
+    variables: ["jobTitle", "company", "studyField", "experienceYears", "userName", "applicationDate"],
+    isDefault: true,
+    category: "Candidature"
+  },
+  {
+    name: "Relance apr\xE8s candidature",
+    subject: "Relance \u2014 Candidature {{jobTitle}}",
+    body: "Madame, Monsieur,\n\nJe me permets de revenir vers vous concernant ma candidature au poste de {{jobTitle}} envoy\xE9e le {{applicationDate}}.\n\nMon profil vous a-t-il \xE9t\xE9 pr\xE9sent\xE9 ? Je reste tr\xE8s motiv\xE9(e) par cette opportunit\xE9 au sein de {{company}} et me tiens \xE0 votre disposition pour tout compl\xE9ment d'information ou un entretien.\n\nCordialement,\n{{userName}}",
+    variables: ["jobTitle", "applicationDate", "company", "userName"],
+    isDefault: true,
+    category: "Relance"
+  },
+  {
+    name: "Remerciement apr\xE8s entretien",
+    subject: "Remerciement \u2014 Entretien {{jobTitle}}",
+    body: "Bonjour {{recruiterName}},\n\nJe tenais \xE0 vous remercier pour le temps que vous m'avez accord\xE9 lors de notre entretien pour le poste de {{jobTitle}}.\n\nNotre \xE9change a renforc\xE9 mon int\xE9r\xEAt pour rejoindre {{company}}. N'h\xE9sitez pas \xE0 me solliciter si vous avez besoin de pr\xE9cisions suppl\xE9mentaires.\n\nDans l'attente de votre retour,\nCordialement,\n{{userName}}",
+    variables: ["recruiterName", "jobTitle", "company", "userName"],
+    isDefault: true,
+    category: "Remerciement"
+  }
+];
+async function ensureDefaultTemplates() {
+  try {
+    for (const t of DEFAULT_TEMPLATES) {
+      await EmailTemplate_default.updateOne(
+        { isDefault: true, name: t.name },
+        { $set: { ...t, isDefault: true } },
+        { upsert: true }
+      );
+    }
+  } catch (error) {
+    console.error("ensureDefaultTemplates error:", error.message);
+  }
+}
 router9.get("/templates", protect, async (req, res) => {
   try {
+    await ensureDefaultTemplates();
     const templates = await EmailTemplate_default.find({
       $or: [{ userId: req.user._id }, { isDefault: true }]
     }).sort({ isDefault: -1, name: 1 });
@@ -2898,35 +3048,6 @@ var analytics_default = router11;
 import express12 from "express";
 import mongoose14 from "mongoose";
 var router12 = express12.Router();
-var cvSchema = new mongoose14.Schema({
-  userId: { type: mongoose14.Schema.Types.ObjectId, ref: "User", required: true },
-  fileName: String,
-  originalName: String,
-  fileData: String,
-  fileSize: Number,
-  mimeType: String,
-  extractedText: { type: String, default: "" },
-  parsedData: {
-    skills: [String],
-    experience: [{ title: String, company: String, period: String, description: String }],
-    education: [{ degree: String, institution: String, year: String }],
-    languages: [String],
-    email: String,
-    phone: String,
-    location: String
-  },
-  analysis: {
-    score: { type: Number, default: 0 },
-    strengths: [String],
-    improvements: [String],
-    suggestions: [String]
-  },
-  candidateSummary: { type: String, default: "" },
-  keywords: [String],
-  isActive: { type: Boolean, default: true },
-  version: { type: Number, default: 1 }
-}, { timestamps: true });
-var CV = mongoose14.models.CV || mongoose14.model("CV", cvSchema);
 function analyzeCV(text, parsedData) {
   let score = 0;
   const strengths = [];
@@ -3493,7 +3614,7 @@ function parseCVData(text) {
     if (HEADER_EDU_RE.test(line)) continue;
     const yearMatch = line.match(/(\d{4}\s*[-–]\s*\d{4})/);
     const year = yearMatch ? yearMatch[0] : "";
-    let fullText = line.replace(/^\d{4}\s*[-–]\s*\d{4}\s*[:\-]?\s*/, "").trim();
+    let fullText = line.replace(/^\d{4}\s*[-–]\s*\d{4}\s*[:-]?\s*/, "").trim();
     for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
       const next = lines[j];
       if (/^\d{4}\s*[-–]\s*\d{4}/.test(next)) break;
@@ -3555,7 +3676,7 @@ function parseCVData(text) {
 }
 router12.get("/", protect, async (req, res) => {
   try {
-    const cv = await CV.findOne({ userId: req.user._id, isActive: true });
+    const cv = await CV_default.findOne({ userId: req.user._id, isActive: true });
     res.json({ cv });
   } catch (error) {
     res.status(500).json({ error: "Erreur serveur" });
@@ -3564,7 +3685,7 @@ router12.get("/", protect, async (req, res) => {
 router12.post("/", protect, upload.single("cv"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "Aucun fichier fourni" });
-    await CV.updateMany({ userId: req.user._id, isActive: true }, { isActive: false });
+    await CV_default.updateMany({ userId: req.user._id, isActive: true }, { isActive: false });
     let extractedText = "";
     if (req.file.mimetype === "application/pdf") {
       try {
@@ -3581,7 +3702,7 @@ router12.post("/", protect, upload.single("cv"), async (req, res) => {
     const analysis = analyzeCV(extractedText, parsedData);
     const candidateSummary = generateCandidateSummary(extractedText, parsedData, {});
     const keywords = extractKeywords(extractedText, parsedData);
-    const cv = await CV.create({
+    const cv = await CV_default.create({
       userId: req.user._id,
       fileName: `cv_${Date.now()}`,
       originalName: req.file.originalname,
@@ -3621,7 +3742,7 @@ router12.post("/analyze-text", protect, async (req, res) => {
 router12.post("/match-jobs", protect, async (req, res) => {
   try {
     const { keywords } = req.body || {};
-    const cv = await CV.findOne({ userId: req.user._id, isActive: true });
+    const cv = await CV_default.findOne({ userId: req.user._id, isActive: true });
     if (!cv) return res.status(404).json({ error: "Aucun CV trouv\xE9" });
     const JobOffer = mongoose14.model("JobOffer");
     const query = { userId: req.user._id, isActive: true };
@@ -3678,7 +3799,7 @@ router12.post("/match-jobs", protect, async (req, res) => {
 });
 router12.delete("/:id", protect, async (req, res) => {
   try {
-    await CV.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
+    await CV_default.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
     res.json({ message: "CV supprim\xE9" });
   } catch (error) {
     res.status(500).json({ error: "Erreur serveur" });
@@ -3686,7 +3807,7 @@ router12.delete("/:id", protect, async (req, res) => {
 });
 router12.put("/:id", protect, async (req, res) => {
   try {
-    const cv = await CV.findOne({ _id: req.params.id, userId: req.user._id });
+    const cv = await CV_default.findOne({ _id: req.params.id, userId: req.user._id });
     if (!cv) return res.status(404).json({ error: "CV non trouv\xE9" });
     if (req.body.reanalyze) {
       if (!cv.fileData) return res.status(400).json({ error: "Aucune donn\xE9e de CV stock\xE9e" });
@@ -3728,7 +3849,7 @@ router12.put("/:id", protect, async (req, res) => {
 });
 router12.post("/backfill-summaries", protect, async (req, res) => {
   try {
-    const cvs = await CV.find({ isActive: true });
+    const cvs = await CV_default.find({ isActive: true });
     let updated = 0;
     for (const cv of cvs) {
       cv.candidateSummary = generateCandidateSummary(cv.extractedText || "", cv.parsedData || {}, {});
@@ -3789,36 +3910,8 @@ var portfolio_default = router13;
 // backend/routes/recruiterSpace.js
 import express14 from "express";
 import mongoose16 from "mongoose";
+init_sendEmail();
 var router14 = express14.Router();
-var cvSchema2 = new mongoose16.Schema({
-  userId: { type: mongoose16.Schema.Types.ObjectId, ref: "User", required: true },
-  fileName: String,
-  originalName: String,
-  fileData: String,
-  fileSize: Number,
-  mimeType: String,
-  extractedText: { type: String, default: "" },
-  parsedData: {
-    skills: [String],
-    experience: [{ title: String, company: String, period: String, description: String }],
-    education: [{ degree: String, institution: String, year: String }],
-    languages: [String],
-    email: String,
-    phone: String,
-    location: String
-  },
-  analysis: {
-    score: { type: Number, default: 0 },
-    strengths: [String],
-    improvements: [String],
-    suggestions: [String]
-  },
-  candidateSummary: { type: String, default: "" },
-  keywords: [String],
-  isActive: { type: Boolean, default: true },
-  version: { type: Number, default: 1 }
-}, { timestamps: true });
-var CV2 = mongoose16.models.CV || mongoose16.model("CV", cvSchema2);
 function generateCandidateSummary2(text, parsedData, userProfile) {
   const parts = [];
   const firstName = userProfile?.userId?.firstName || "Le candidat";
@@ -4223,7 +4316,7 @@ router14.get("/candidates", protect, authorize("recruiter"), async (req, res) =>
     const userIds = filteredProfiles.map((p) => p.userId?._id).filter(Boolean);
     let cvMap = {};
     if (userIds.length > 0) {
-      const cvs = await CV2.find({ userId: { $in: userIds }, isActive: true }).select("userId originalName fileSize analysis candidateSummary keywords parsedData.skills extractedText");
+      const cvs = await CV_default.find({ userId: { $in: userIds }, isActive: true }).select("userId originalName fileSize analysis candidateSummary keywords parsedData.skills extractedText");
       for (const cv of cvs) {
         if (!cv.candidateSummary || cv.extractedText) {
           cv.candidateSummary = generateCandidateSummary2(cv.extractedText, cv.parsedData || {}, {});
@@ -4276,7 +4369,7 @@ router14.get("/candidates/:userId", protect, authorize("recruiter"), async (req,
     if (!profile || !profile.userId) {
       return res.status(404).json({ error: "Candidat non trouv\xE9" });
     }
-    const cv = await CV2.findOne({ userId, isActive: true }).select("originalName fileSize analysis parsedData extractedText version createdAt");
+    const cv = await CV_default.findOne({ userId, isActive: true }).select("originalName fileSize analysis parsedData extractedText version createdAt");
     res.json({ candidate: profile, cv });
   } catch (error) {
     console.error("Candidate detail error:", error);
@@ -4288,7 +4381,7 @@ router14.get("/candidates/:userId/cv/download", protect, authorize("recruiter"),
     if (!mongoose16.Types.ObjectId.isValid(req.params.userId)) {
       return res.status(400).json({ error: "ID invalide" });
     }
-    const cv = await CV2.findOne({ userId: req.params.userId, isActive: true });
+    const cv = await CV_default.findOne({ userId: req.params.userId, isActive: true });
     if (!cv || !cv.fileData) {
       return res.status(404).json({ error: "CV non trouv\xE9" });
     }
@@ -4307,7 +4400,7 @@ router14.get("/candidates/:userId/cv/preview", protect, authorize("recruiter"), 
     if (!mongoose16.Types.ObjectId.isValid(req.params.userId)) {
       return res.status(400).json({ error: "ID invalide" });
     }
-    const cv = await CV2.findOne({ userId: req.params.userId, isActive: true }).select("fileData fileSize mimeType originalName");
+    const cv = await CV_default.findOne({ userId: req.params.userId, isActive: true }).select("fileData fileSize mimeType originalName");
     if (!cv) {
       return res.status(404).json({ error: "CV non trouv\xE9" });
     }
@@ -4448,32 +4541,28 @@ router14.post("/candidates/:userId/email", protect, authorize("recruiter"), asyn
       return res.status(404).json({ error: "Candidat non trouv\xE9" });
     }
     const profile = await RecruiterProfile_default.findOne({ userId: req.user._id });
-    const { sendEmail: sendEmail2 } = await Promise.resolve().then(() => (init_sendEmail(), sendEmail_exports));
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="text-align: center; margin-bottom: 20px;">
-          <h1 style="color: #10b981; font-size: 24px;">EasyJob \u2014 Message d'un recruteur</h1>
-        </div>
-        <div style="background: #f0fdf4; border-radius: 12px; padding: 24px; border: 1px solid #bbf7d0;">
-          <p style="color: #166534; font-weight: bold; margin-bottom: 8px;">
-            ${req.user.firstName} ${req.user.lastName} ${profile?.companyName ? `(${profile.companyName})` : ""}
-          </p>
-          <p style="color: #166534; font-size: 13px; margin-bottom: 16px;">
-            ${profile?.position || "Recruteur"} ${profile?.companyName ? `chez ${profile.companyName}` : ""}
-          </p>
-          <hr style="border: none; border-top: 1px solid #bbf7d0; margin: 16px 0;" />
-          <div style="color: #334155; line-height: 1.6; white-space: pre-wrap;">
-${message}
-          </div>
-        </div>
-        <p style="color: #94a3b8; font-size: 12px; text-align: center; margin-top: 16px;">
-          Ce message a \xE9t\xE9 envoy\xE9 via EasyJob. Veuillez ne pas r\xE9pondre directement \xE0 cet email.
-        </p>
-      </div>
+    const { sendEmail: sendEmail2, brandLayout: brandLayout2 } = await Promise.resolve().then(() => (init_sendEmail(), sendEmail_exports));
+    const candidateName = `${targetUser.firstName || ""} ${targetUser.lastName || ""}`.trim() || "Candidat";
+    const recruiterName = escapeHtml(`${req.user.firstName} ${req.user.lastName}`);
+    const companyName = profile?.companyName ? escapeHtml(profile.companyName) : "";
+    const position = profile?.position ? escapeHtml(profile.position) : "Recruteur";
+    const safeSubject = escapeHtml(subject);
+    const safeMessage = escapeHtml(message);
+    const content = `
+      <p style="margin:0 0 8px 0; font-size:14px; color:#334155; line-height:1.6;">Bonjour <strong>${escapeHtml(candidateName)}</strong>,</p>
+      <p style="margin:0 0 20px 0; font-size:14px; color:#334155; line-height:1.6;">${recruiterName}${companyName ? ` (${companyName})` : ""} vous a envoy\xE9 un message via EasyJob :</p>
+      <div style="background:#ecfdf5; border-left:4px solid #10b981; border-radius:12px; padding:18px 20px; margin:0 0 6px 0; white-space:pre-wrap; color:#334155; font-size:14px; line-height:1.7;">${safeMessage}</div>
+      <p style="margin:14px 0 0 0; font-size:12px; color:#94a3b8; line-height:1.6;">${position}${companyName ? ` chez ${companyName}` : ""}</p>
+      <p style="margin:4px 0 0 0; font-size:12px; color:#94a3b8; line-height:1.6;">Ce message a \xE9t\xE9 envoy\xE9 via EasyJob. Veuillez ne pas r\xE9pondre directement \xE0 cet email.</p>
     `;
+    const html = brandLayout2({
+      accent: "#10b981",
+      title: "Message d'un recruteur",
+      content
+    });
     const result = await sendEmail2({
       to: targetUser.email,
-      subject: `[EasyJob] ${subject}`,
+      subject: `[EasyJob] ${safeSubject}`,
       html
     });
     if (result.success) {
@@ -4491,6 +4580,37 @@ var recruiterSpace_default = router14;
 
 // backend/routes/companyEmails.js
 import express15 from "express";
+
+// backend/models/CompanyEmail.js
+import mongoose17 from "mongoose";
+var companyEmailSchema = new mongoose17.Schema({
+  companyName: { type: String, required: true, trim: true },
+  email: { type: String, required: true, lowercase: true, trim: true },
+  website: { type: String, default: "" },
+  sector: { type: String, required: true },
+  domain: { type: String, required: true },
+  companyType: {
+    type: String,
+    enum: ["multinationale", "publique", "privee", "startup", "pme", "cabinet", "ong"],
+    default: "privee"
+  },
+  companySize: {
+    type: String,
+    enum: ["1-10", "11-50", "51-200", "201-500", "501-1000", "1000+"],
+    default: "51-200"
+  },
+  city: { type: String, default: "Casablanca" },
+  country: { type: String, default: "Maroc" },
+  phone: { type: String, default: "" },
+  description: { type: String, default: "" },
+  isActive: { type: Boolean, default: true }
+}, { timestamps: true });
+companyEmailSchema.index({ companyName: "text", email: "text", sector: "text", domain: "text" });
+companyEmailSchema.index({ sector: 1, domain: 1, companyType: 1, city: 1 });
+companyEmailSchema.index({ email: 1 }, { unique: true });
+var CompanyEmail_default = mongoose17.model("CompanyEmail", companyEmailSchema);
+
+// backend/routes/companyEmails.js
 var router15 = express15.Router();
 router15.get("/", protect, async (req, res) => {
   try {
@@ -4727,9 +4847,11 @@ router16.post("/recruiter-jobs", protect, async (req, res) => {
 var seed_default = router16;
 
 // backend/server.js
-mongoose18.set("toJSON", { virtuals: true, versionKey: false });
-mongoose18.set("toObject", { virtuals: true, versionKey: false });
+mongoose19.set("toJSON", { virtuals: true, versionKey: false });
+mongoose19.set("toObject", { virtuals: true, versionKey: false });
+mongoose19.set("sanitizeFilter", true);
 var app = express17();
+app.set("trust proxy", 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 var allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173").split(",").map((o) => o.trim()).filter(Boolean);
 app.use(cors({
@@ -4743,10 +4865,15 @@ app.use(cors({
   credentials: true
 }));
 app.use(express17.json({ limit: "10mb" }));
-app.use(express17.urlencoded({ extended: true }));
+app.use(express17.urlencoded({ extended: true, limit: "1mb" }));
 app.use(cookieParser());
 var limiter = rateLimit({ windowMs: 15 * 60 * 1e3, max: 200, message: { error: "Trop de requ\xEAtes" } });
 app.use("/api/", limiter);
+var authLimiter = rateLimit({ windowMs: 15 * 60 * 1e3, max: 30, message: { error: "Trop de tentatives, r\xE9essayez plus tard" } });
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/register", authLimiter);
+app.use("/api/auth/verify-email", authLimiter);
+app.use("/api/auth/forgot-password", authLimiter);
 app.use("/api/auth", auth_default);
 app.use("/api/profile/cv", cv_default);
 app.use("/api/profile/portfolio", portfolio_default);
@@ -4767,19 +4894,20 @@ app.get("/api/health", (req, res) => res.json({ status: "ok", timestamp: /* @__P
 app.use("/api", (req, res) => {
   res.status(404).json({ error: `Route non trouv\xE9e: ${req.method} ${req.originalUrl}` });
 });
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   console.error(err.stack);
-  res.status(err.status || 500).json({ error: err.message || "Erreur serveur interne" });
+  const status = err.status || 500;
+  res.status(status).json({ error: status === 500 ? "Erreur serveur interne" : err.message || "Erreur" });
 });
 async function connectDB() {
-  if (mongoose18.connection.readyState === 1) return;
+  if (mongoose19.connection.readyState === 1) return;
   const uri = process.env.MONGODB_URI;
   if (!uri) {
     console.error("\u274C MONGODB_URI non d\xE9fini");
     throw new Error("MONGODB_URI non d\xE9fini");
   }
   try {
-    await mongoose18.connect(uri);
+    await mongoose19.connect(uri);
     console.log("\u2705 MongoDB connect\xE9");
     const { fixJobOfferIndexes: fixJobOfferIndexes2 } = await Promise.resolve().then(() => (init_dbMigration(), dbMigration_exports));
     await fixJobOfferIndexes2();
@@ -4791,6 +4919,7 @@ async function connectDB() {
 var server_default = app;
 
 // backend/handler.js
+dotenv.config({ path: new URL("../.env", import.meta.url) });
 var isConnected = false;
 async function handler(req, res) {
   if (!isConnected) {

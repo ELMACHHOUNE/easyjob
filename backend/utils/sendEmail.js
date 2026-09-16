@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer'
 
-let transporterPromise = null
+let transporter = null
 
 export function escapeHtml(value = '') {
   return String(value)
@@ -57,81 +57,69 @@ export function brandLayout({ accent = '#2563eb', title, content, footerText }) 
   `
 }
 
-function hasRealCreds() {
+function isEmailConfigured() {
   return !!(process.env.EMAIL_USER && process.env.EMAIL_PASS
-    && process.env.EMAIL_USER !== 'your_email@gmail.com'
-    && process.env.EMAIL_PASS !== 'your_app_password')
+    && !process.env.EMAIL_USER.startsWith('your_')
+    && !process.env.EMAIL_PASS.startsWith('your_'))
 }
 
 function getFromAddress() {
   const envFrom = process.env.EMAIL_FROM
-  if (envFrom && !envFrom.includes('noreply@easyjob.ma') && !envFrom.includes('your_email@gmail.com')) {
+  if (envFrom && !envFrom.includes('your_email@gmail.com')) {
     return envFrom
   }
-  if (hasRealCreds()) {
-    return `EasyJob <${process.env.EMAIL_USER}>`
-  }
-  return 'EasyJob <noreply@easyjob.ma>'
+  return `EasyJob <${process.env.EMAIL_USER}>`
 }
 
-async function getTransporter() {
-  if (transporterPromise) return transporterPromise
+function getTransporter() {
+  if (transporter) return transporter
 
-  if (hasRealCreds()) {
-    transporterPromise = Promise.resolve(nodemailer.createTransport({
-      host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.EMAIL_PORT || '587', 10),
-      secure: false,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    }))
-  } else {
-    const testAccount = await nodemailer.createTestAccount()
-    console.log('📧 Ethereal test account:', testAccount.user)
-    transporterPromise = Promise.resolve(nodemailer.createTransport({
-      host: 'smtp.ethereal.email',
-      port: 587,
-      secure: false,
-      auth: {
-        user: testAccount.user,
-        pass: testAccount.pass,
-      },
-    }))
-  }
+  const port = parseInt(process.env.EMAIL_PORT || '587', 10)
 
-  transporterPromise.then(async (transporter) => {
-    try {
-      await transporter.verify()
-      console.log('✅ SMTP connecté et authentifié')
-    } catch (err) {
-      console.error('❌ Échec de la connexion SMTP:', err.message)
-    }
+  transporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+    port,
+    secure: port === 465,
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+    pool: true,
+    maxConnections: 5,
+    maxMessages: 100,
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 30000,
   })
 
-  return transporterPromise
+  transporter.verify().then((ok) => {
+    if (ok) console.log('✅ SMTP connecté et authentifié')
+  }).catch((err) => {
+    console.error('❌ Échec de la connexion SMTP:', err.message)
+  })
+
+  return transporter
 }
 
 export const sendEmail = async ({ to, subject, html, attachments }) => {
   try {
-    const transporter = await getTransporter()
-    const info = await transporter.sendMail({
+    if (!isEmailConfigured()) {
+      console.warn(`⚠️ Email non envoyé à ${to} (sujet: "${subject}") — SMTP non configuré. Définissez EMAIL_USER/EMAIL_PASS dans le fichier .env`)
+      return { success: false, emailSent: false, error: 'SMTP non configuré' }
+    }
+
+    const info = await getTransporter().sendMail({
       from: getFromAddress(),
       to,
       subject,
       html,
       ...(attachments && attachments.length ? { attachments } : {}),
     })
-    const previewUrl = nodemailer.getTestMessageUrl(info)
     console.log('📧 Email envoyé:', info.messageId)
-    if (previewUrl) {
-      console.log('🔗 Voir l\'email:', previewUrl)
-    }
-    return { success: true, messageId: info.messageId, previewUrl: previewUrl || null }
+    return { success: true, emailSent: true, messageId: info.messageId }
   } catch (error) {
     console.error('❌ Erreur envoi email:', error.message)
-    return { success: false, error: error.message }
+    return { success: false, emailSent: false, error: error.message }
   }
 }
 

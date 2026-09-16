@@ -75,7 +75,6 @@ router.post('/register', async (req, res) => {
       refreshToken,
       user,
       emailSent,
-      previewUrl: emailResult.previewUrl || null,
     })
   } catch (error) {
     console.error('Erreur register:', error)
@@ -123,7 +122,7 @@ router.post('/resend-verification', async (req, res) => {
     await user.save()
 
     const emailResult = await sendVerificationEmail(user.email, user.firstName, verificationCode)
-    res.json({ message: 'Code de vérification renvoyé', previewUrl: emailResult.previewUrl || null })
+    res.json({ message: 'Code de vérification renvoyé', emailSent: emailResult.success })
   } catch (error) {
     res.status(500).json({ error: 'Erreur lors de l\'envoi' })
   }

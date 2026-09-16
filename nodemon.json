@@ -1,6 +1,5 @@
 {
   "watch": ["backend"],
   "ext": "js,mjs,json",
-  "ignore": ["backend/data/gen3.ps1"],
-  "exec": "node backend/start.js"
+  "ignore": ["backend/data/gen3.ps1"]
 }

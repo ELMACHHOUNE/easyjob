@@ -23,8 +23,13 @@ import seedRoutes from './routes/seed.js'
 
 mongoose.set('toJSON', { virtuals: true, versionKey: false })
 mongoose.set('toObject', { virtuals: true, versionKey: false })
+mongoose.set('sanitizeFilter', true)
 
 const app = express()
+
+// Behind Vercel / reverse proxies: trust the first proxy so req.ip is correct
+// (required for express-rate-limit to distinguish clients)
+app.set('trust proxy', 1)
 
 app.use(helmet({ contentSecurityPolicy: false }))
 const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
@@ -43,11 +48,19 @@ app.use(cors({
   credentials: true
 }))
 app.use(express.json({ limit: '10mb' }))
-app.use(express.urlencoded({ extended: true }))
+app.use(express.urlencoded({ extended: true, limit: '1mb' }))
 app.use(cookieParser())
 
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, message: { error: 'Trop de requêtes' } })
 app.use('/api/', limiter)
+
+// Stricter limit on auth endpoints to slow down credential-stuffing
+// and verification-code brute force
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, message: { error: 'Trop de tentatives, réessayez plus tard' } })
+app.use('/api/auth/login', authLimiter)
+app.use('/api/auth/register', authLimiter)
+app.use('/api/auth/verify-email', authLimiter)
+app.use('/api/auth/forgot-password', authLimiter)
 
 app.use('/api/auth', authRoutes)
 app.use('/api/profile/cv', cvRoutes)
@@ -74,7 +87,9 @@ app.use('/api', (req, res) => {
 
 app.use((err, req, res, _next) => {
   console.error(err.stack)
-  res.status(err.status || 500).json({ error: err.message || 'Erreur serveur interne' })
+  const status = err.status || 500
+  // Never leak internal error details (stacks, driver messages) to clients on 5xx
+  res.status(status).json({ error: status === 500 ? 'Erreur serveur interne' : (err.message || 'Erreur') })
 })
 
 async function connectDB() {

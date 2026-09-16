@@ -55,7 +55,7 @@ export function AuthProvider({ children }) {
       localStorage.setItem('easyjob_refresh_token', data.refreshToken)
       localStorage.setItem('easyjob_user', JSON.stringify(data.user))
       setUser(data.user)
-      return { success: true, user: data.user, emailSent: data.emailSent, previewUrl: data.previewUrl }
+      return { success: true, user: data.user, emailSent: data.emailSent }
     } catch (error) {
       return { success: false, error: error.message }
     }
@@ -79,7 +79,7 @@ export function AuthProvider({ children }) {
   const resendVerification = useCallback(async (email) => {
     try {
       const { data } = await api.post('/auth/resend-verification', { email })
-      return { success: true, message: data.message, previewUrl: data.previewUrl }
+      return { success: true, message: data.message }
     } catch (error) {
       return { success: false, error: error.message }
     }

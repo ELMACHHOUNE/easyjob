@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { useNavigate, useLocation, Link } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Mail, ArrowLeft, Loader2, CheckCircle, RefreshCw, ExternalLink, Eye } from 'lucide-react'
+import { Mail, ArrowLeft, Loader2, CheckCircle, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/context/AuthContext'
 import AuthLayout from '@/layouts/AuthLayout'
@@ -12,21 +12,13 @@ export default function VerifyEmailPage() {
   const [loading, setLoading] = useState(false)
   const [resending, setResending] = useState(false)
   const [success, setSuccess] = useState(false)
-  const [previewUrl, setPreviewUrl] = useState(null)
   const inputRefs = useRef([])
   const { user, verifyEmail, resendVerification } = useAuth()
   const navigate = useNavigate()
-  const location = useLocation()
 
   useEffect(() => {
     if (!user) navigate('/login')
   }, [user, navigate])
-
-  useEffect(() => {
-    if (location.state?.previewUrl) {
-      setPreviewUrl(location.state.previewUrl)
-    }
-  }, [location.state])
 
   const handleChange = (index, value) => {
     if (!/^\d*$/.test(value)) return
@@ -78,9 +70,6 @@ export default function VerifyEmailPage() {
     setResending(false)
     if (result.success) {
       toast.success('Nouveau code envoyé !')
-      if (result.previewUrl) {
-        setPreviewUrl(result.previewUrl)
-      }
     } else {
       toast.error(result.error)
     }
@@ -130,31 +119,6 @@ export default function VerifyEmailPage() {
           <span className="font-medium text-foreground">{user?.email}</span>
         </p>
       </div>
-
-      {previewUrl && (
-        <div className="mb-6 rounded-xl border-2 border-dashed border-primary/40 bg-primary/5 p-4">
-          <div className="flex items-start gap-3">
-            <Eye className="mt-0.5 size-5 shrink-0 text-primary" />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-primary">
-                Mode développement — Email de test
-              </p>
-              <p className="mt-1 text-xs text-primary/80">
-                Les emails sont envoyés via Ethereal. Cliquez ci-dessous pour voir l'email contenant votre code :
-              </p>
-              <a
-                href={previewUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-muted break-all"
-              >
-                <ExternalLink className="size-4 shrink-0" />
-                <span className="truncate">{previewUrl}</span>
-              </a>
-            </div>
-          </div>
-        </div>
-      )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="flex justify-center gap-2">
