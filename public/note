@@ -1,0 +1,20 @@
+-nodemailer
+-shadcn
+-radix ui
+-getdesign
+
+
+template 
+Candidature au poste de {{jobTitle}} chez {{company}}
+Corps du template
+Bonjour {{recruiterName}},
+
+Je me permets de vous adresser ma candidature pour le poste de {{jobTitle}} au sein de {{company}}.
+
+Titulaire d'un diplôme en {{studyField}} et fort de {{experienceYears}} années d'expérience, je suis convaincu de pouvoir contribuer activement aux projets de votre entreprise.
+
+Je me tiens à votre disposition pour un entretien à votre convenance.
+
+Cordialement,
+{{userName}}
+{{applicationDate}}
