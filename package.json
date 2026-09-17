@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "vite",
     "server": "nodemon backend/server.js",
+    "dev:server": "start \"EasyJob Server\" cmd /k \"nodemon backend/server.js\"",
+    "dev:client": "start \"EasyJob Client\" cmd /k \"npm run dev\"",
     "dev:all": "concurrently -n client,server -c cyan,green \"npm run dev\" \"npm run server\"",
     "start": "node backend/server.js",
     "seed": "node backend/seed.js",
