@@ -1,8 +1,9 @@
 import mongoose from 'mongoose'
 import dotenv from 'dotenv'
+import { fileURLToPath } from 'node:url'
 import User from './models/User.js'
 
-dotenv.config()
+dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) })
 
 const NEW_PASSWORD = '123456789'
 

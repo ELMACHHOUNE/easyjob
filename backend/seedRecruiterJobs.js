@@ -1,5 +1,9 @@
 import mongoose from 'mongoose'
+import dotenv from 'dotenv'
+import { fileURLToPath } from 'node:url'
 import JobOffer from './models/JobOffer.js'
+
+dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) })
 
 const sampleJobs = [
   { title: 'Développeur Full Stack React/Node.js', company: 'TechPro Maroc', location: 'Casablanca', isRemote: true, contractType: 'CDI', description: 'Nous recherchons un développeur Full Stack expérimenté pour rejoindre notre équipe technique.', requirements: ['React', 'Node.js', 'MongoDB', 'TypeScript', 'Git'], responsibilities: ['Développer des fonctionnalités frontend et backend', 'Participer aux code reviews', 'Contribuer à l\'architecture technique'], salary: { min: 15000, max: 25000, currency: 'MAD', period: 'month' }, sector: 'Technologies', domain: 'informatique', keywords: ['react', 'node', 'fullstack', 'javascript'] },

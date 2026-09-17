@@ -1,5 +1,8 @@
 import mongoose from 'mongoose'
 import dotenv from 'dotenv'
+import { fileURLToPath } from 'node:url'
+
+dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) })
 import User from './models/User.js'
 import UserProfile from './models/UserProfile.js'
 import RecruiterProfile from './models/RecruiterProfile.js'
@@ -10,8 +13,6 @@ import Recruiter from './models/Recruiter.js'
 import EmailTemplate from './models/EmailTemplate.js'
 import CompanyEmail from './models/CompanyEmail.js'
 import companyEmailsData from './data/companyEmails.js'
-
-dotenv.config()
 
 const PASSWORD = 'Tahtah2002@'
 

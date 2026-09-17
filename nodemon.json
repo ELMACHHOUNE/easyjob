@@ -1,5 +1,0 @@
-{
-  "watch": ["backend"],
-  "ext": "js,mjs,json",
-  "ignore": ["backend/data/gen3.ps1"]
-}

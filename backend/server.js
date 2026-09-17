@@ -4,6 +4,11 @@ import cors from 'cors'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import cookieParser from 'cookie-parser'
+import http from 'http'
+import dotenv from 'dotenv'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { setupSocket } from './services/socketManager.js'
+import { startNotificationCron } from './services/notificationCron.js'
 import authRoutes from './routes/auth.js'
 import profileRoutes from './routes/profile.js'
 import jobRoutes from './routes/jobs.js'
@@ -27,6 +32,10 @@ mongoose.set('sanitizeFilter', true)
 
 const app = express()
 
+// Charger les variables serveur depuis backend/.env (chemin relatif au fichier,
+// indépendant du répertoire de travail courant)
+dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) })
+
 // Behind Vercel / reverse proxies: trust the first proxy so req.ip is correct
 // (required for express-rate-limit to distinguish clients)
 app.set('trust proxy', 1)
@@ -42,7 +51,9 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin) || origin.includes('.vercel.app')) {
       callback(null, true)
     } else {
-      callback(new Error('Not allowed by CORS'))
+      // Origine refusée : pas de header Access-Control-Allow-Origin,
+      // le navigateur bloque la lecture de la réponse.
+      callback(null, false)
     }
   },
   credentials: true
@@ -114,3 +125,36 @@ async function connectDB() {
 
 export { connectDB }
 export default app
+
+// ————— Bootstrap (point d'entrée) —————
+// server.js est le point d'entrée du serveur. Il écoute uniquement quand il est
+// exécuté directement (`node backend/server.js` / `nodemon backend/server.js`),
+// jamais quand il est importé par handler.js (bundle Vercel).
+const isMain = !process.env.VERCEL
+  && process.argv[1]
+  && import.meta.url === pathToFileURL(process.argv[1]).href
+
+if (isMain) {
+  const PORT = process.env.PORT || 5000
+
+  async function start() {
+    console.log('🚀 Démarrage du serveur EasyJob…')
+    await connectDB()
+
+    const server = http.createServer(app)
+    setupSocket(server)
+    startNotificationCron()
+
+    server.listen(PORT, () => {
+      console.log(`🚀 Serveur EasyJob sur port ${PORT}`)
+      console.log(`📡 API: http://localhost:${PORT}/api`)
+      console.log(`🔗 Frontend: http://localhost:5173`)
+      console.log(`🔌 WebSocket: ws://localhost:${PORT}`)
+    })
+  }
+
+  start().catch(err => {
+    console.error('❌ Erreur fatale:', err)
+    process.exit(1)
+  })
+}

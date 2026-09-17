@@ -10,9 +10,14 @@ export function getIO() {
 }
 
 export function setupSocket(server) {
+  const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
+    .split(',')
+    .map(o => o.trim())
+    .filter(Boolean)
+
   io = new Server(server, {
     cors: {
-      origin: ['http://localhost:5173', 'http://localhost:3000', 'https://easyjob.vercel.app'],
+      origin: allowedOrigins,
       methods: ['GET', 'POST'],
       credentials: true,
     },

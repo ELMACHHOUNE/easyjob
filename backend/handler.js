@@ -1,6 +1,5 @@
-import dotenv from 'dotenv'
-dotenv.config({ path: new URL('../.env', import.meta.url) })
-
+// Env chargé par server.js (dotenv.config sur backend/.env). Sur Vercel,
+// les variables sont injectées par la plateforme au runtime.
 import app, { connectDB } from './server.js'
 
 let isConnected = false

@@ -193,9 +193,6 @@ var init_dbMigration = __esm({
   }
 });
 
-// backend/handler.js
-import dotenv from "dotenv";
-
 // backend/server.js
 import express17 from "express";
 import mongoose19 from "mongoose";
@@ -203,10 +200,13 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import cookieParser from "cookie-parser";
+import http from "http";
+import dotenv from "dotenv";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-// backend/routes/auth.js
-import express from "express";
-import jwt3 from "jsonwebtoken";
+// backend/services/socketManager.js
+import { Server } from "socket.io";
+import jwt from "jsonwebtoken";
 
 // backend/models/User.js
 import mongoose from "mongoose";
@@ -263,10 +263,41 @@ userSchema.methods.toJSON = function() {
 };
 var User_default = mongoose.model("User", userSchema);
 
-// backend/models/UserProfile.js
+// backend/models/Notification.js
 import mongoose2 from "mongoose";
-var userProfileSchema = new mongoose2.Schema({
-  userId: { type: mongoose2.Schema.Types.ObjectId, ref: "User", required: true, unique: true },
+var notificationSchema = new mongoose2.Schema({
+  userId: { type: mongoose2.Schema.Types.ObjectId, ref: "User", required: true },
+  type: {
+    type: String,
+    enum: [
+      "nouvelle_offre",
+      "candidature",
+      "candidature_statut",
+      "email",
+      "scrapping",
+      "rappel",
+      "nouvelle_entreprise",
+      "candidat_suggere",
+      "nouvelle_candidature",
+      "entretien",
+      "acceptation"
+    ],
+    required: true
+  },
+  title: { type: String, required: true },
+  message: { type: String, required: true },
+  data: mongoose2.Schema.Types.Mixed,
+  isRead: { type: Boolean, default: false },
+  actionUrl: String
+}, { timestamps: true });
+notificationSchema.index({ userId: 1, createdAt: -1 });
+notificationSchema.index({ userId: 1, isRead: 1 });
+var Notification_default = mongoose2.model("Notification", notificationSchema);
+
+// backend/models/UserProfile.js
+import mongoose3 from "mongoose";
+var userProfileSchema = new mongoose3.Schema({
+  userId: { type: mongoose3.Schema.Types.ObjectId, ref: "User", required: true, unique: true },
   title: { type: String, default: "" },
   summary: { type: String, default: "" },
   presentation: { type: String, default: "", maxlength: 500 },
@@ -319,12 +350,438 @@ var userProfileSchema = new mongoose2.Schema({
   searchKeywords: [String],
   preferredLocations: [String]
 }, { timestamps: true });
-var UserProfile_default = mongoose2.model("UserProfile", userProfileSchema);
+var UserProfile_default = mongoose3.model("UserProfile", userProfileSchema);
+
+// backend/models/JobOffer.js
+import mongoose4 from "mongoose";
+var jobOfferSchema = new mongoose4.Schema({
+  userId: { type: mongoose4.Schema.Types.ObjectId, ref: "User" },
+  postedBy: { type: mongoose4.Schema.Types.ObjectId, ref: "User" },
+  source: { type: String, enum: ["linkedin", "indeed", "welcometothejungle", "rekrute", "manpower", "manual", "recruiter", "autre"] },
+  sourceId: String,
+  sourceUrl: String,
+  title: { type: String, required: true },
+  company: { type: String, required: true },
+  companyLogo: String,
+  companyUrl: String,
+  location: { type: String, required: true },
+  isRemote: { type: Boolean, default: false },
+  contractType: { type: String, enum: ["CDI", "CDD", "Stage", "Freelance", "Temps partiel"], required: true },
+  description: { type: String, default: "" },
+  requirements: [String],
+  responsibilities: [String],
+  salary: {
+    min: Number,
+    max: Number,
+    currency: { type: String, default: "MAD" },
+    period: { type: String, default: "monthly" }
+  },
+  postedAt: Date,
+  expiresAt: Date,
+  scrapedAt: Date,
+  sector: { type: String, default: "" },
+  domain: { type: String, default: "" },
+  keywords: [String],
+  relevanceScore: { type: Number, default: 0, min: 0, max: 100 },
+  isSaved: { type: Boolean, default: false },
+  isActive: { type: Boolean, default: true },
+  viewsCount: { type: Number, default: 0 },
+  applicationsCount: { type: Number, default: 0 },
+  maxApplications: { type: Number, default: 100 },
+  applicationDeadline: Date
+}, { timestamps: true });
+jobOfferSchema.index(
+  { userId: 1, source: 1, sourceId: 1 },
+  { unique: true, partialFilterExpression: { sourceId: { $type: "string" } } }
+);
+jobOfferSchema.index({ userId: 1, isActive: 1 });
+jobOfferSchema.index({ postedBy: 1, isActive: 1 });
+jobOfferSchema.index({ title: "text", company: "text", description: "text" });
+jobOfferSchema.index({ domain: 1, sector: 1, isActive: 1 });
+var JobOffer_default = mongoose4.model("JobOffer", jobOfferSchema);
+
+// backend/services/NotificationService.js
+var io = null;
+function setSocketIO(socketIO) {
+  io = socketIO;
+}
+function emitToUser(userId, notification) {
+  if (io) {
+    io.to(`user:${userId}`).emit("notification", notification);
+    io.to(`user:${userId}`).emit("unread_count", { unreadCount: 1 });
+  }
+}
+async function createNotification({ userId, type, title, message, data, actionUrl }) {
+  try {
+    const notification = await Notification_default.create({
+      userId,
+      type,
+      title,
+      message,
+      data,
+      actionUrl
+    });
+    emitToUser(userId, notification);
+    return notification;
+  } catch (err) {
+    console.error("Erreur cr\xE9ation notification:", err.message);
+    return null;
+  }
+}
+async function notifyNewJobOffer(jobOffer) {
+  try {
+    const profileQuery = {};
+    const regexPatterns = [jobOffer.sector, jobOffer.domain].filter(Boolean);
+    if (regexPatterns.length > 0) {
+      profileQuery.domains = { $in: regexPatterns.map((p) => new RegExp(p, "i")) };
+    }
+    const profiles = await UserProfile_default.find(profileQuery).populate("userId");
+    for (const profile of profiles) {
+      const user = profile.userId;
+      if (!user || user.role !== "candidat") continue;
+      const skills = jobOffer.requirements || [];
+      const userSkills = profile.skills || [];
+      const matchCount = skills.filter(
+        (s) => userSkills.some((us) => us.toLowerCase().includes(s.toLowerCase()))
+      ).length;
+      if (matchCount === 0) continue;
+      await createNotification({
+        userId: user._id,
+        type: "nouvelle_offre",
+        title: "Nouvelle offre correspondant \xE0 votre profil",
+        message: `${jobOffer.title} chez ${jobOffer.company} - ${jobOffer.location}${jobOffer.isRemote ? " (Remote)" : ""}`,
+        data: { jobOfferId: jobOffer._id, matchCount, totalSkills: skills.length },
+        actionUrl: `/job-offers/${jobOffer._id}`
+      });
+    }
+  } catch (err) {
+    console.error("Erreur notifyNewJobOffer:", err.message);
+  }
+}
+async function notifyApplicationStatusChange(application, oldStatus, newStatus, changedBy) {
+  try {
+    const jobOffer = await JobOffer_default.findById(application.jobOfferId);
+    if (!jobOffer) return;
+    const statusLabels = {
+      envoyee: "Candidature envoy\xE9e",
+      consulte: "Candidature consult\xE9e",
+      valide_entretien: "Candidature valid\xE9e pour entretien",
+      appel_attente: "En attente d'appel pour entretien",
+      entretien_fait: "Entretien termin\xE9",
+      accepte_final: "Acceptation finale",
+      refusee: "Candidature refus\xE9e"
+    };
+    const titles = {
+      consulte: "Votre candidature a \xE9t\xE9 consult\xE9e",
+      valide_entretien: "Vous \xEAtes retenu pour un entretien",
+      appel_attente: "En attente de planification",
+      entretien_fait: "Entretien termin\xE9 - en attente de d\xE9cision",
+      accepte_final: "F\xE9licitations ! Vous \xEAtes accept\xE9",
+      refusee: "Mise \xE0 jour de votre candidature"
+    };
+    const messages = {
+      consulte: `Le recruteur a consult\xE9 votre candidature pour ${jobOffer.title} chez ${jobOffer.company}`,
+      valide_entretien: `Votre profil a \xE9t\xE9 retenu pour ${jobOffer.title} chez ${jobOffer.company}. Un recruteur vous contactera prochainement`,
+      appel_attente: `Veuillez patienter, le recruteur va vous appeler pour planifier l'entretien pour ${jobOffer.title}`,
+      entretien_fait: `L'entretien pour ${jobOffer.title} est termin\xE9. Le recruteur \xE9tudie votre dossier`,
+      accepte_final: `F\xE9licitations ! Vous avez \xE9t\xE9 accept\xE9 pour le poste ${jobOffer.title} chez ${jobOffer.company}`,
+      refusee: `Votre candidature pour ${jobOffer.title} chez ${jobOffer.company} n'a pas \xE9t\xE9 retenue`
+    };
+    const typeMap = {
+      valide_entretien: "entretien",
+      accepte_final: "acceptation"
+    };
+    await createNotification({
+      userId: application.userId,
+      type: typeMap[newStatus] || "candidature_statut",
+      title: titles[newStatus] || statusLabels[newStatus] || `Statut mis \xE0 jour : ${newStatus}`,
+      message: messages[newStatus] || `Votre candidature pour ${jobOffer.title} est maintenant : ${statusLabels[newStatus] || newStatus}`,
+      data: { applicationId: application._id, jobOfferId: jobOffer._id, oldStatus, newStatus, changedBy },
+      actionUrl: `/applications/${application._id}`
+    });
+  } catch (err) {
+    console.error("Erreur notifyApplicationStatusChange:", err.message);
+  }
+}
+async function notifyNewCompany(company) {
+  try {
+    const candidates = await User_default.find({ role: "candidat" });
+    for (const user of candidates) {
+      await createNotification({
+        userId: user._id,
+        type: "nouvelle_entreprise",
+        title: "Nouvelle entreprise disponible",
+        message: `${company.companyName} a rejoint notre plateforme - ${company.sector} \xE0 ${company.city}`,
+        data: { companyEmailId: company._id, companyName: company.companyName },
+        actionUrl: `/company-emails`
+      });
+    }
+  } catch (err) {
+    console.error("Erreur notifyNewCompany:", err.message);
+  }
+}
+async function notifyScrapingComplete(userId, results) {
+  try {
+    await createNotification({
+      userId,
+      type: "scrapping",
+      title: "Scraping termin\xE9",
+      message: `${results.count || 0} nouvelles offres d'emploi ont \xE9t\xE9 trouv\xE9es. Consultez les r\xE9sultats`,
+      data: { count: results.count, source: results.source, results },
+      actionUrl: `/job-offers?source=${results.source || "scraped"}`
+    });
+  } catch (err) {
+    console.error("Erreur notifyScrapingComplete:", err.message);
+  }
+}
+async function notifyNewApplicationToRecruiter(application, jobOffer) {
+  try {
+    const recruiter = await User_default.findById(jobOffer.postedBy || jobOffer.userId);
+    if (!recruiter || recruiter.role !== "recruiter") return;
+    await createNotification({
+      userId: recruiter._id,
+      type: "nouvelle_candidature",
+      title: "Nouvelle candidature re\xE7ue",
+      message: `Un candidat a postul\xE9 \xE0 votre offre ${jobOffer.title}`,
+      data: { applicationId: application._id, jobOfferId: jobOffer._id },
+      actionUrl: `/recruiter/applications`
+    });
+  } catch (err) {
+    console.error("Erreur notifyNewApplicationToRecruiter:", err.message);
+  }
+}
+async function notifySuggestedCandidates(recruiterId, jobOffer, candidateCount) {
+  try {
+    await createNotification({
+      userId: recruiterId,
+      type: "candidat_suggere",
+      title: "Candidats sugg\xE9r\xE9s pour votre offre",
+      message: `${candidateCount} candidats correspondent \xE0 votre offre ${jobOffer.title}`,
+      data: { jobOfferId: jobOffer._id, candidateCount },
+      actionUrl: `/recruiter/jobs/${jobOffer._id}/candidates`
+    });
+  } catch (err) {
+    console.error("Erreur notifySuggestedCandidates:", err.message);
+  }
+}
+async function notifyEncouragement(userId) {
+  const messages = [
+    { title: "Continuez vos recherches", message: "N'oubliez pas de consulter les nouvelles offres publi\xE9es aujourd'hui" },
+    { title: "Astuce candidature", message: "Personnalisez votre CV pour chaque offre pour augmenter vos chances" },
+    { title: "Restez actif", message: "Les recruteurs consultent les profils r\xE9cemment actifs. Mettez \xE0 jour votre profil" },
+    { title: "Nouveaux recruteurs", message: "De nouvelles entreprises recherchent des profils comme le v\xF4tre" },
+    { title: "Scraping programm\xE9", message: "Pensez \xE0 lancer un scraping pour d\xE9couvrir plus d'opportunit\xE9s" },
+    { title: "Suivi de candidature", message: "Relancez les recruteurs si vous n'avez pas de retour apr\xE8s une semaine" }
+  ];
+  const msg = messages[Math.floor(Math.random() * messages.length)];
+  try {
+    await createNotification({
+      userId,
+      type: "rappel",
+      title: msg.title,
+      message: msg.message,
+      data: {},
+      actionUrl: "/job-offers"
+    });
+  } catch (err) {
+    console.error("Erreur notifyEncouragement:", err.message);
+  }
+}
+async function notifyEmailFromCompany(userId, companyName, subject) {
+  try {
+    await createNotification({
+      userId,
+      type: "email",
+      title: "Email re\xE7u d'une entreprise",
+      message: `${companyName} vous a envoy\xE9 un email : ${subject}`,
+      data: { companyName, subject },
+      actionUrl: "/applications"
+    });
+  } catch (err) {
+    console.error("Erreur notifyEmailFromCompany:", err.message);
+  }
+}
+
+// backend/services/socketManager.js
+var io2 = null;
+function setupSocket(server) {
+  const allowedOrigins2 = (process.env.FRONTEND_URL || "http://localhost:5173").split(",").map((o) => o.trim()).filter(Boolean);
+  io2 = new Server(server, {
+    cors: {
+      origin: allowedOrigins2,
+      methods: ["GET", "POST"],
+      credentials: true
+    },
+    pingTimeout: 6e4,
+    pingInterval: 25e3
+  });
+  setSocketIO(io2);
+  io2.use(async (socket, next) => {
+    try {
+      const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+      if (!token) {
+        return next(new Error("Authentification requise"));
+      }
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const user = await User_default.findById(decoded.id).select("-password");
+      if (!user) {
+        return next(new Error("Utilisateur non trouv\xE9"));
+      }
+      socket.userId = user._id.toString();
+      socket.userRole = user.role;
+      socket.user = user;
+      next();
+    } catch (err) {
+      return next(new Error("Token invalide"));
+    }
+  });
+  io2.on("connection", (socket) => {
+    console.log(`\u{1F50C} Socket connect\xE9: ${socket.userId} (${socket.userRole})`);
+    socket.join(`user:${socket.userId}`);
+    socket.join(`role:${socket.userRole}`);
+    socket.on("join_user", (userId) => {
+      if (userId === socket.userId) {
+        socket.join(`user:${userId}`);
+      }
+    });
+    socket.on("disconnect", () => {
+      console.log(`\u{1F50C} Socket d\xE9connect\xE9: ${socket.userId}`);
+    });
+  });
+  console.log("\u{1F680} Socket.IO configur\xE9");
+  return io2;
+}
+
+// backend/services/notificationCron.js
+import cron from "node-cron";
+
+// backend/models/Application.js
+import mongoose5 from "mongoose";
+var applicationSchema = new mongoose5.Schema({
+  userId: { type: mongoose5.Schema.Types.ObjectId, ref: "User", required: true },
+  jobOfferId: { type: mongoose5.Schema.Types.ObjectId, ref: "JobOffer", required: true },
+  status: {
+    type: String,
+    enum: [
+      "brouillon",
+      "envoyee",
+      "consulte",
+      "valide_entretien",
+      "appel_attente",
+      "entretien_fait",
+      "accepte_final",
+      "refusee"
+    ],
+    default: "brouillon"
+  },
+  email: {
+    to: String,
+    subject: String,
+    body: String,
+    attachCv: { type: Boolean, default: false },
+    messageId: String,
+    sentAt: Date,
+    openedAt: Date
+  },
+  coverLetter: String,
+  notes: String,
+  followUpDate: Date,
+  followUpCount: { type: Number, default: 0 },
+  statusHistory: [{
+    status: String,
+    changedAt: { type: Date, default: Date.now },
+    changedBy: { type: String, enum: ["candidat", "recruteur", "systeme"], default: "systeme" },
+    note: String
+  }],
+  candidateInfo: {
+    firstName: { type: String, default: "" },
+    lastName: { type: String, default: "" },
+    email: { type: String, default: "" },
+    phone: { type: String, default: "" },
+    city: { type: String, default: "" },
+    title: { type: String, default: "" },
+    linkedin: { type: String, default: "" },
+    github: { type: String, default: "" },
+    portfolio: { type: String, default: "" },
+    summary: { type: String, default: "" },
+    skills: [String],
+    domains: [String],
+    experience: [{
+      position: String,
+      company: String,
+      startDate: Date,
+      endDate: Date,
+      isCurrent: { type: Boolean, default: false },
+      description: String
+    }],
+    education: [{
+      degree: String,
+      institution: String,
+      field: String,
+      endDate: Date
+    }],
+    languages: [{ language: String, level: String }],
+    cvSummary: { type: String, default: "" },
+    cvFileName: { type: String, default: "" },
+    cvFileData: { type: String, default: "" },
+    cvMimeType: { type: String, default: "" },
+    keywords: [String],
+    matchScore: { type: Number, default: 0 }
+  }
+}, { timestamps: true });
+applicationSchema.index({ userId: 1, jobOfferId: 1 }, { unique: true });
+applicationSchema.index({ jobOfferId: 1, status: 1 });
+var Application_default = mongoose5.model("Application", applicationSchema);
+
+// backend/services/notificationCron.js
+function startNotificationCron() {
+  cron.schedule("0 9 * * 1,3,5", async () => {
+    console.log("\u23F0 Cron: Envoi des encouragements...");
+    try {
+      const candidates = await User_default.find({ role: "candidat" });
+      for (const user of candidates) {
+        await notifyEncouragement(user._id);
+      }
+      console.log(`\u2705 ${candidates.length} encouragements envoy\xE9s`);
+    } catch (err) {
+      console.error("\u274C Erreur cron encouragements:", err.message);
+    }
+  });
+  cron.schedule("0 10 * * 1", async () => {
+    console.log("\u23F0 Cron: V\xE9rification des candidatures sans suivi...");
+    try {
+      const oneWeekAgo = /* @__PURE__ */ new Date();
+      oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+      const staleApps = await Application_default.find({
+        status: { $in: ["envoyee", "consulte"] },
+        updatedAt: { $lt: oneWeekAgo }
+      }).populate("jobOfferId");
+      for (const app2 of staleApps) {
+        await createNotification({
+          userId: app2.userId,
+          type: "rappel",
+          title: "Relance sugg\xE9r\xE9e",
+          message: `Votre candidature pour ${app2.jobOfferId?.title || "une offre"} n'a pas eu de mise \xE0 jour depuis une semaine. Pensez \xE0 relancer le recruteur`,
+          data: { applicationId: app2._id },
+          actionUrl: `/applications/${app2._id}`
+        });
+      }
+      console.log(`\u2705 ${staleApps.length} relances sugg\xE9r\xE9es`);
+    } catch (err) {
+      console.error("\u274C Erreur cron relances:", err.message);
+    }
+  });
+  console.log("\u23F0 Cron notifications d\xE9marr\xE9");
+}
+
+// backend/routes/auth.js
+import express from "express";
+import jwt4 from "jsonwebtoken";
 
 // backend/models/RecruiterProfile.js
-import mongoose3 from "mongoose";
-var recruiterProfileSchema = new mongoose3.Schema({
-  userId: { type: mongoose3.Schema.Types.ObjectId, ref: "User", required: true, unique: true },
+import mongoose6 from "mongoose";
+var recruiterProfileSchema = new mongoose6.Schema({
+  userId: { type: mongoose6.Schema.Types.ObjectId, ref: "User", required: true, unique: true },
   companyName: { type: String, required: true },
   companyDescription: { type: String, default: "" },
   companyWebsite: { type: String, default: "" },
@@ -338,16 +795,16 @@ var recruiterProfileSchema = new mongoose3.Schema({
   jobPostingsCount: { type: Number, default: 0 },
   totalApplications: { type: Number, default: 0 }
 }, { timestamps: true });
-var RecruiterProfile_default = mongoose3.model("RecruiterProfile", recruiterProfileSchema);
+var RecruiterProfile_default = mongoose6.model("RecruiterProfile", recruiterProfileSchema);
 
 // backend/utils/generateToken.js
-import jwt from "jsonwebtoken";
+import jwt2 from "jsonwebtoken";
 import crypto from "crypto";
 var generateAccessToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "15m" });
+  return jwt2.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "15m" });
 };
 var generateRefreshToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_REFRESH_SECRET, { expiresIn: "7d" });
+  return jwt2.sign({ id: userId }, process.env.JWT_REFRESH_SECRET, { expiresIn: "7d" });
 };
 var generateEmailVerificationCode = () => {
   return crypto.randomInt(1e5, 1e6).toString();
@@ -360,7 +817,7 @@ var generateResetPasswordToken = () => {
 init_sendEmail();
 
 // backend/middlewares/auth.js
-import jwt2 from "jsonwebtoken";
+import jwt3 from "jsonwebtoken";
 var protect = async (req, res, next) => {
   let token;
   if (req.headers.authorization?.startsWith("Bearer")) {
@@ -370,7 +827,7 @@ var protect = async (req, res, next) => {
   }
   if (!token) return res.status(401).json({ error: "Non autoris\xE9. Veuillez vous connecter." });
   try {
-    const decoded = jwt2.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt3.verify(token, process.env.JWT_SECRET);
     const user = await User_default.findById(decoded.id).select("-password -refreshToken -avatar");
     if (!user) return res.status(401).json({ error: "Utilisateur non trouv\xE9" });
     if (!user.isActive) return res.status(403).json({ error: "Compte d\xE9sactiv\xE9" });
@@ -534,7 +991,7 @@ router.post("/refresh-token", async (req, res) => {
   try {
     const { refreshToken } = req.body;
     if (!refreshToken) return res.status(401).json({ error: "Refresh token requis" });
-    const decoded = jwt3.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    const decoded = jwt4.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
     const user = await User_default.findById(decoded.id);
     if (!user || user.refreshToken !== refreshToken) {
       return res.status(401).json({ error: "Refresh token invalide" });
@@ -623,7 +1080,7 @@ var auth_default = router;
 
 // backend/routes/profile.js
 import express2 from "express";
-import mongoose4 from "mongoose";
+import mongoose7 from "mongoose";
 
 // backend/utils/fileUpload.js
 import multer from "multer";
@@ -653,7 +1110,7 @@ router2.get("/", protect, async (req, res) => {
     }
     let hasCV = false;
     try {
-      const CV = mongoose4.models.CV;
+      const CV = mongoose7.models.CV;
       if (CV) {
         const cv = await CV.findOne({ userId: req.user._id, isActive: true });
         hasCV = !!cv;
@@ -752,339 +1209,6 @@ var profile_default = router2;
 
 // backend/routes/jobs.js
 import express3 from "express";
-
-// backend/models/JobOffer.js
-import mongoose5 from "mongoose";
-var jobOfferSchema = new mongoose5.Schema({
-  userId: { type: mongoose5.Schema.Types.ObjectId, ref: "User" },
-  postedBy: { type: mongoose5.Schema.Types.ObjectId, ref: "User" },
-  source: { type: String, enum: ["linkedin", "indeed", "welcometothejungle", "rekrute", "manpower", "manual", "recruiter", "autre"] },
-  sourceId: String,
-  sourceUrl: String,
-  title: { type: String, required: true },
-  company: { type: String, required: true },
-  companyLogo: String,
-  companyUrl: String,
-  location: { type: String, required: true },
-  isRemote: { type: Boolean, default: false },
-  contractType: { type: String, enum: ["CDI", "CDD", "Stage", "Freelance", "Temps partiel"], required: true },
-  description: { type: String, default: "" },
-  requirements: [String],
-  responsibilities: [String],
-  salary: {
-    min: Number,
-    max: Number,
-    currency: { type: String, default: "MAD" },
-    period: { type: String, default: "monthly" }
-  },
-  postedAt: Date,
-  expiresAt: Date,
-  scrapedAt: Date,
-  sector: { type: String, default: "" },
-  domain: { type: String, default: "" },
-  keywords: [String],
-  relevanceScore: { type: Number, default: 0, min: 0, max: 100 },
-  isSaved: { type: Boolean, default: false },
-  isActive: { type: Boolean, default: true },
-  viewsCount: { type: Number, default: 0 },
-  applicationsCount: { type: Number, default: 0 },
-  maxApplications: { type: Number, default: 100 },
-  applicationDeadline: Date
-}, { timestamps: true });
-jobOfferSchema.index(
-  { userId: 1, source: 1, sourceId: 1 },
-  { unique: true, partialFilterExpression: { sourceId: { $type: "string" } } }
-);
-jobOfferSchema.index({ userId: 1, isActive: 1 });
-jobOfferSchema.index({ postedBy: 1, isActive: 1 });
-jobOfferSchema.index({ title: "text", company: "text", description: "text" });
-jobOfferSchema.index({ domain: 1, sector: 1, isActive: 1 });
-var JobOffer_default = mongoose5.model("JobOffer", jobOfferSchema);
-
-// backend/models/Application.js
-import mongoose6 from "mongoose";
-var applicationSchema = new mongoose6.Schema({
-  userId: { type: mongoose6.Schema.Types.ObjectId, ref: "User", required: true },
-  jobOfferId: { type: mongoose6.Schema.Types.ObjectId, ref: "JobOffer", required: true },
-  status: {
-    type: String,
-    enum: [
-      "brouillon",
-      "envoyee",
-      "consulte",
-      "valide_entretien",
-      "appel_attente",
-      "entretien_fait",
-      "accepte_final",
-      "refusee"
-    ],
-    default: "brouillon"
-  },
-  email: {
-    to: String,
-    subject: String,
-    body: String,
-    attachCv: { type: Boolean, default: false },
-    messageId: String,
-    sentAt: Date,
-    openedAt: Date
-  },
-  coverLetter: String,
-  notes: String,
-  followUpDate: Date,
-  followUpCount: { type: Number, default: 0 },
-  statusHistory: [{
-    status: String,
-    changedAt: { type: Date, default: Date.now },
-    changedBy: { type: String, enum: ["candidat", "recruteur", "systeme"], default: "systeme" },
-    note: String
-  }],
-  candidateInfo: {
-    firstName: { type: String, default: "" },
-    lastName: { type: String, default: "" },
-    email: { type: String, default: "" },
-    phone: { type: String, default: "" },
-    city: { type: String, default: "" },
-    title: { type: String, default: "" },
-    linkedin: { type: String, default: "" },
-    github: { type: String, default: "" },
-    portfolio: { type: String, default: "" },
-    summary: { type: String, default: "" },
-    skills: [String],
-    domains: [String],
-    experience: [{
-      position: String,
-      company: String,
-      startDate: Date,
-      endDate: Date,
-      isCurrent: { type: Boolean, default: false },
-      description: String
-    }],
-    education: [{
-      degree: String,
-      institution: String,
-      field: String,
-      endDate: Date
-    }],
-    languages: [{ language: String, level: String }],
-    cvSummary: { type: String, default: "" },
-    cvFileName: { type: String, default: "" },
-    cvFileData: { type: String, default: "" },
-    cvMimeType: { type: String, default: "" },
-    keywords: [String],
-    matchScore: { type: Number, default: 0 }
-  }
-}, { timestamps: true });
-applicationSchema.index({ userId: 1, jobOfferId: 1 }, { unique: true });
-applicationSchema.index({ jobOfferId: 1, status: 1 });
-var Application_default = mongoose6.model("Application", applicationSchema);
-
-// backend/models/Notification.js
-import mongoose7 from "mongoose";
-var notificationSchema = new mongoose7.Schema({
-  userId: { type: mongoose7.Schema.Types.ObjectId, ref: "User", required: true },
-  type: {
-    type: String,
-    enum: [
-      "nouvelle_offre",
-      "candidature",
-      "candidature_statut",
-      "email",
-      "scrapping",
-      "rappel",
-      "nouvelle_entreprise",
-      "candidat_suggere",
-      "nouvelle_candidature",
-      "entretien",
-      "acceptation"
-    ],
-    required: true
-  },
-  title: { type: String, required: true },
-  message: { type: String, required: true },
-  data: mongoose7.Schema.Types.Mixed,
-  isRead: { type: Boolean, default: false },
-  actionUrl: String
-}, { timestamps: true });
-notificationSchema.index({ userId: 1, createdAt: -1 });
-notificationSchema.index({ userId: 1, isRead: 1 });
-var Notification_default = mongoose7.model("Notification", notificationSchema);
-
-// backend/services/NotificationService.js
-var io = null;
-function emitToUser(userId, notification) {
-  if (io) {
-    io.to(`user:${userId}`).emit("notification", notification);
-    io.to(`user:${userId}`).emit("unread_count", { unreadCount: 1 });
-  }
-}
-async function createNotification({ userId, type, title, message, data, actionUrl }) {
-  try {
-    const notification = await Notification_default.create({
-      userId,
-      type,
-      title,
-      message,
-      data,
-      actionUrl
-    });
-    emitToUser(userId, notification);
-    return notification;
-  } catch (err) {
-    console.error("Erreur cr\xE9ation notification:", err.message);
-    return null;
-  }
-}
-async function notifyNewJobOffer(jobOffer) {
-  try {
-    const profileQuery = {};
-    const regexPatterns = [jobOffer.sector, jobOffer.domain].filter(Boolean);
-    if (regexPatterns.length > 0) {
-      profileQuery.domains = { $in: regexPatterns.map((p) => new RegExp(p, "i")) };
-    }
-    const profiles = await UserProfile_default.find(profileQuery).populate("userId");
-    for (const profile of profiles) {
-      const user = profile.userId;
-      if (!user || user.role !== "candidat") continue;
-      const skills = jobOffer.requirements || [];
-      const userSkills = profile.skills || [];
-      const matchCount = skills.filter(
-        (s) => userSkills.some((us) => us.toLowerCase().includes(s.toLowerCase()))
-      ).length;
-      if (matchCount === 0) continue;
-      await createNotification({
-        userId: user._id,
-        type: "nouvelle_offre",
-        title: "Nouvelle offre correspondant \xE0 votre profil",
-        message: `${jobOffer.title} chez ${jobOffer.company} - ${jobOffer.location}${jobOffer.isRemote ? " (Remote)" : ""}`,
-        data: { jobOfferId: jobOffer._id, matchCount, totalSkills: skills.length },
-        actionUrl: `/job-offers/${jobOffer._id}`
-      });
-    }
-  } catch (err) {
-    console.error("Erreur notifyNewJobOffer:", err.message);
-  }
-}
-async function notifyApplicationStatusChange(application, oldStatus, newStatus, changedBy) {
-  try {
-    const jobOffer = await JobOffer_default.findById(application.jobOfferId);
-    if (!jobOffer) return;
-    const statusLabels = {
-      envoyee: "Candidature envoy\xE9e",
-      consulte: "Candidature consult\xE9e",
-      valide_entretien: "Candidature valid\xE9e pour entretien",
-      appel_attente: "En attente d'appel pour entretien",
-      entretien_fait: "Entretien termin\xE9",
-      accepte_final: "Acceptation finale",
-      refusee: "Candidature refus\xE9e"
-    };
-    const titles = {
-      consulte: "Votre candidature a \xE9t\xE9 consult\xE9e",
-      valide_entretien: "Vous \xEAtes retenu pour un entretien",
-      appel_attente: "En attente de planification",
-      entretien_fait: "Entretien termin\xE9 - en attente de d\xE9cision",
-      accepte_final: "F\xE9licitations ! Vous \xEAtes accept\xE9",
-      refusee: "Mise \xE0 jour de votre candidature"
-    };
-    const messages = {
-      consulte: `Le recruteur a consult\xE9 votre candidature pour ${jobOffer.title} chez ${jobOffer.company}`,
-      valide_entretien: `Votre profil a \xE9t\xE9 retenu pour ${jobOffer.title} chez ${jobOffer.company}. Un recruteur vous contactera prochainement`,
-      appel_attente: `Veuillez patienter, le recruteur va vous appeler pour planifier l'entretien pour ${jobOffer.title}`,
-      entretien_fait: `L'entretien pour ${jobOffer.title} est termin\xE9. Le recruteur \xE9tudie votre dossier`,
-      accepte_final: `F\xE9licitations ! Vous avez \xE9t\xE9 accept\xE9 pour le poste ${jobOffer.title} chez ${jobOffer.company}`,
-      refusee: `Votre candidature pour ${jobOffer.title} chez ${jobOffer.company} n'a pas \xE9t\xE9 retenue`
-    };
-    const typeMap = {
-      valide_entretien: "entretien",
-      accepte_final: "acceptation"
-    };
-    await createNotification({
-      userId: application.userId,
-      type: typeMap[newStatus] || "candidature_statut",
-      title: titles[newStatus] || statusLabels[newStatus] || `Statut mis \xE0 jour : ${newStatus}`,
-      message: messages[newStatus] || `Votre candidature pour ${jobOffer.title} est maintenant : ${statusLabels[newStatus] || newStatus}`,
-      data: { applicationId: application._id, jobOfferId: jobOffer._id, oldStatus, newStatus, changedBy },
-      actionUrl: `/applications/${application._id}`
-    });
-  } catch (err) {
-    console.error("Erreur notifyApplicationStatusChange:", err.message);
-  }
-}
-async function notifyNewCompany(company) {
-  try {
-    const candidates = await User_default.find({ role: "candidat" });
-    for (const user of candidates) {
-      await createNotification({
-        userId: user._id,
-        type: "nouvelle_entreprise",
-        title: "Nouvelle entreprise disponible",
-        message: `${company.companyName} a rejoint notre plateforme - ${company.sector} \xE0 ${company.city}`,
-        data: { companyEmailId: company._id, companyName: company.companyName },
-        actionUrl: `/company-emails`
-      });
-    }
-  } catch (err) {
-    console.error("Erreur notifyNewCompany:", err.message);
-  }
-}
-async function notifyScrapingComplete(userId, results) {
-  try {
-    await createNotification({
-      userId,
-      type: "scrapping",
-      title: "Scraping termin\xE9",
-      message: `${results.count || 0} nouvelles offres d'emploi ont \xE9t\xE9 trouv\xE9es. Consultez les r\xE9sultats`,
-      data: { count: results.count, source: results.source, results },
-      actionUrl: `/job-offers?source=${results.source || "scraped"}`
-    });
-  } catch (err) {
-    console.error("Erreur notifyScrapingComplete:", err.message);
-  }
-}
-async function notifyNewApplicationToRecruiter(application, jobOffer) {
-  try {
-    const recruiter = await User_default.findById(jobOffer.postedBy || jobOffer.userId);
-    if (!recruiter || recruiter.role !== "recruiter") return;
-    await createNotification({
-      userId: recruiter._id,
-      type: "nouvelle_candidature",
-      title: "Nouvelle candidature re\xE7ue",
-      message: `Un candidat a postul\xE9 \xE0 votre offre ${jobOffer.title}`,
-      data: { applicationId: application._id, jobOfferId: jobOffer._id },
-      actionUrl: `/recruiter/applications`
-    });
-  } catch (err) {
-    console.error("Erreur notifyNewApplicationToRecruiter:", err.message);
-  }
-}
-async function notifySuggestedCandidates(recruiterId, jobOffer, candidateCount) {
-  try {
-    await createNotification({
-      userId: recruiterId,
-      type: "candidat_suggere",
-      title: "Candidats sugg\xE9r\xE9s pour votre offre",
-      message: `${candidateCount} candidats correspondent \xE0 votre offre ${jobOffer.title}`,
-      data: { jobOfferId: jobOffer._id, candidateCount },
-      actionUrl: `/recruiter/jobs/${jobOffer._id}/candidates`
-    });
-  } catch (err) {
-    console.error("Erreur notifySuggestedCandidates:", err.message);
-  }
-}
-async function notifyEmailFromCompany(userId, companyName, subject) {
-  try {
-    await createNotification({
-      userId,
-      type: "email",
-      title: "Email re\xE7u d'une entreprise",
-      message: `${companyName} vous a envoy\xE9 un email : ${subject}`,
-      data: { companyName, subject },
-      actionUrl: "/applications"
-    });
-  } catch (err) {
-    console.error("Erreur notifyEmailFromCompany:", err.message);
-  }
-}
 
 // backend/services/jobScraper.js
 import axios from "axios";
@@ -4851,6 +4975,7 @@ mongoose19.set("toJSON", { virtuals: true, versionKey: false });
 mongoose19.set("toObject", { virtuals: true, versionKey: false });
 mongoose19.set("sanitizeFilter", true);
 var app = express17();
+dotenv.config({ path: fileURLToPath(new URL("./.env", import.meta.url)) });
 app.set("trust proxy", 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 var allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173").split(",").map((o) => o.trim()).filter(Boolean);
@@ -4859,7 +4984,7 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin) || origin.includes(".vercel.app")) {
       callback(null, true);
     } else {
-      callback(new Error("Not allowed by CORS"));
+      callback(null, false);
     }
   },
   credentials: true
@@ -4917,9 +5042,29 @@ async function connectDB() {
   }
 }
 var server_default = app;
+var isMain = !process.env.VERCEL && process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  const PORT = process.env.PORT || 5e3;
+  async function start() {
+    console.log("\u{1F680} D\xE9marrage du serveur EasyJob\u2026");
+    await connectDB();
+    const server = http.createServer(app);
+    setupSocket(server);
+    startNotificationCron();
+    server.listen(PORT, () => {
+      console.log(`\u{1F680} Serveur EasyJob sur port ${PORT}`);
+      console.log(`\u{1F4E1} API: http://localhost:${PORT}/api`);
+      console.log(`\u{1F517} Frontend: http://localhost:5173`);
+      console.log(`\u{1F50C} WebSocket: ws://localhost:${PORT}`);
+    });
+  }
+  start().catch((err) => {
+    console.error("\u274C Erreur fatale:", err);
+    process.exit(1);
+  });
+}
 
 // backend/handler.js
-dotenv.config({ path: new URL("../.env", import.meta.url) });
 var isConnected = false;
 async function handler(req, res) {
   if (!isConnected) {

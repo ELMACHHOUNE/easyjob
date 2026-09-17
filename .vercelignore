@@ -1,6 +1,0 @@
-backend/
-.vercel/
-.qodo/
-node_modules/
-*.log
-test_cv.pdf

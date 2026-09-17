@@ -8,9 +8,9 @@
   },
   "scripts": {
     "dev": "vite",
-    "server": "nodemon backend/start.js",
+    "server": "nodemon backend/server.js",
     "dev:all": "concurrently -n client,server -c cyan,green \"npm run dev\" \"npm run server\"",
-    "start": "node backend/start.js",
+    "start": "node backend/server.js",
     "seed": "node backend/seed.js",
     "build": "vite build",
     "build:api": "node build-api.js",
